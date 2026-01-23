@@ -6,6 +6,8 @@ public class ClientNetwork : MonoBehaviour
     public static ClientNetwork Instance { get; private set; }
 
     public NetManager Client { get; private set; }
+
+    private EventBasedNetListener listener;
     private PacketManager packetManager;
     private ClientSender sender;
 
@@ -15,7 +17,12 @@ public class ClientNetwork : MonoBehaviour
 
     void Awake()
     {
-        if (Instance != null) { Destroy(gameObject); return; }
+        if (Instance != null)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
         Instance = this;
         DontDestroyOnLoad(gameObject);
     }
@@ -25,7 +32,7 @@ public class ClientNetwork : MonoBehaviour
         packetManager = new PacketManager();
         sender = new ClientSender();
 
-        var listener = new EventBasedNetListener();
+        listener = new EventBasedNetListener();
         Client = new NetManager(listener);
 
         listener.PeerConnectedEvent += OnConnected;
@@ -36,41 +43,31 @@ public class ClientNetwork : MonoBehaviour
 
         Client.Start();
         Client.Connect(SERVER_IP, SERVER_PORT, CONNECTION_KEY);
+
         NetworkLogger.Info("Client started");
     }
 
-    void Update() => Client?.PollEvents();
+    void Update()
+    {
+        Client?.PollEvents();
+    }
 
     private void RegisterPackets()
     {
-        packetManager.Register(PacketType.Welcome, payload =>
-        {
-            var packet = MessagePack.MessagePackSerializer.Deserialize<WelcomePacket>(payload);
-            NetworkLogger.Info($"WELCOME | ID={packet.PlayerId} | {packet.Message}");
-        });
-
-        packetManager.Register(PacketType.PlayerJoined, payload =>
-        {
-            var packet = MessagePack.MessagePackSerializer.Deserialize<PlayerJoinedPacket>(payload);
-            NetworkLogger.Info($"PLAYER JOINED | ID={packet.PlayerId}");
-        });
-
-        packetManager.Register(PacketType.MOTD, payload =>
-        {
-            var packet = MessagePack.MessagePackSerializer.Deserialize<MOTDPacket>(payload);
-            NetworkLogger.Info($"MOTD: {packet.Message}");
-        });
+        AuthPacketHandlers.Register(packetManager);
+        WorldPacketHandlers.Register(packetManager);
     }
 
     private void OnConnected(NetPeer peer)
     {
         NetworkLogger.Info($"Connected to server: {peer.Id}");
-        sender.SendAuth(peer, "TEST_TOKEN"); // example token
+        sender.SendAuth(peer, "TEST_TOKEN");
     }
 
     private void OnDisconnected(NetPeer peer, DisconnectInfo info)
     {
         NetworkLogger.Warning($"Disconnected: {info.Reason}");
+
 #if UNITY_EDITOR
         UnityEditor.EditorApplication.isPlaying = false;
 #else
@@ -78,17 +75,23 @@ public class ClientNetwork : MonoBehaviour
 #endif
     }
 
-    private void OnReceive(NetPeer peer, LiteNetLib.NetPacketReader reader, byte channel, LiteNetLib.DeliveryMethod method)
+    private void OnReceive(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod method)
     {
-        byte[] receivedData = reader.GetRemainingBytes();
+        byte[] data = reader.GetRemainingBytes();
         reader.Recycle();
 
-        if (receivedData.Length < 32) { NetworkLogger.Warning("Packet too short"); return; }
+        if (data.Length < 32)
+        {
+            NetworkLogger.Warning("Packet too short");
+            return;
+        }
 
+        // Split HMAC + encrypted payload
         byte[] hmac = new byte[32];
-        byte[] encrypted = new byte[receivedData.Length - 32];
-        System.Array.Copy(receivedData, 0, hmac, 0, 32);
-        System.Array.Copy(receivedData, 32, encrypted, 0, encrypted.Length);
+        byte[] encrypted = new byte[data.Length - 32];
+
+        System.Array.Copy(data, 0, hmac, 0, 32);
+        System.Array.Copy(data, 32, encrypted, 0, encrypted.Length);
 
         if (!Shared.PacketSecurity.Verify(encrypted, hmac))
         {
@@ -106,11 +109,14 @@ public class ClientNetwork : MonoBehaviour
         packetManager.Handle(type, payload);
     }
 
-    void OnDestroy() => Shutdown("Client destroyed");
+    void OnDestroy()
+    {
+        Shutdown("Client destroyed");
+    }
 
     private void Shutdown(string reason)
     {
-        NetworkLogger.Warning($"Shutting down: {reason}");
+        NetworkLogger.Warning($"Shutdown: {reason}");
         Client?.Stop();
     }
 }
