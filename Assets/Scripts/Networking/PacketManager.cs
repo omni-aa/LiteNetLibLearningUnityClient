@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using MessagePack;
+using SharedLibrary;
+using UnityEngine;
 
 public class PacketManager
 {
@@ -14,12 +16,23 @@ public class PacketManager
 
     public void Handle(PacketType type, byte[] payload)
     {
+        Debug.Log($"[PacketManager] Handling packet type: {type}");
+        
         if (!_handlers.TryGetValue(type, out var handler))
         {
             NetworkLogger.Warning($"Unhandled packet: {type}");
             return;
         }
-        handler(payload);
+        
+        try
+        {
+            handler(payload);
+            NetworkLogger.Received(type);
+        }
+        catch (Exception ex)
+        {
+            NetworkLogger.Warning($"Error handling packet {type}: {ex.Message}");
+        }
     }
 
     public static byte[] Serialize<T>(PacketType type, T packet)

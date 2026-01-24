@@ -1,4 +1,5 @@
 ﻿using MessagePack;
+using SharedLibrary;
 
 public static class PacketSerializer
 {
