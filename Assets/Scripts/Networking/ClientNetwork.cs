@@ -1,30 +1,36 @@
-using UnityEngine;
+using System;
 using LiteNetLib;
+using UnityEngine;
 
 public class ClientNetwork : MonoBehaviour
 {
     public static ClientNetwork Instance { get; private set; }
 
     public NetManager Client { get; private set; }
-
     private EventBasedNetListener listener;
     private PacketManager packetManager;
     private ClientSender sender;
 
-    private const string SERVER_IP = "127.0.0.1";
-    private const int SERVER_PORT = 9050;
-    private const string CONNECTION_KEY = "MMO_KEY";
+    private string SERVER_IP = "127.0.0.1";
+    private int SERVER_PORT = 9050;
+    private string START_TOKEN = "";
 
     void Awake()
     {
-        if (Instance != null)
-        {
-            Destroy(gameObject);
-            return;
-        }
-
+        if (Instance != null) { Destroy(gameObject); return; }
         Instance = this;
         DontDestroyOnLoad(gameObject);
+
+        // Read args from GameLauncher
+        string[] args = Environment.GetCommandLineArgs();
+        foreach (var arg in args)
+        {
+            if (arg.StartsWith("--token")) START_TOKEN = arg.Split('=')[1].Trim('"');
+            if (arg.StartsWith("--ip")) SERVER_IP = arg.Split('=')[1];
+            if (arg.StartsWith("--port")) SERVER_PORT = int.Parse(arg.Split('=')[1]);
+        }
+
+        Debug.Log($"ClientNetwork Init | Token={START_TOKEN} | IP={SERVER_IP} | Port={SERVER_PORT}");
     }
 
     void Start()
@@ -38,36 +44,29 @@ public class ClientNetwork : MonoBehaviour
         listener.PeerConnectedEvent += OnConnected;
         listener.PeerDisconnectedEvent += OnDisconnected;
         listener.NetworkReceiveEvent += OnReceive;
-
         RegisterPackets();
-
         Client.Start();
-        Client.Connect(SERVER_IP, SERVER_PORT, CONNECTION_KEY);
+        Client.Connect(SERVER_IP, SERVER_PORT, "MMO_KEY");
 
-        NetworkLogger.Info("Client started");
+        Debug.Log("Client started");
     }
-
-    void Update()
-    {
-        Client?.PollEvents();
-    }
-
+    
     private void RegisterPackets()
     {
         AuthPacketHandlers.Register(packetManager);
         WorldPacketHandlers.Register(packetManager);
     }
 
+
     private void OnConnected(NetPeer peer)
     {
-        NetworkLogger.Info($"Connected to server: {peer.Id}");
-        sender.SendAuth(peer, "TEST_TOKEN");
+        Debug.Log($"Connected to server: {peer.Id}");
+        sender.SendAuth(peer, START_TOKEN); // send token to GameServer
     }
 
     private void OnDisconnected(NetPeer peer, DisconnectInfo info)
     {
-        NetworkLogger.Warning($"Disconnected: {info.Reason}");
-
+        Debug.LogWarning($"Disconnected: {info.Reason}");
 #if UNITY_EDITOR
         UnityEditor.EditorApplication.isPlaying = false;
 #else
@@ -80,43 +79,23 @@ public class ClientNetwork : MonoBehaviour
         byte[] data = reader.GetRemainingBytes();
         reader.Recycle();
 
-        if (data.Length < 32)
-        {
-            NetworkLogger.Warning("Packet too short");
-            return;
-        }
+        if (data.Length < 32) return;
 
-        // Split HMAC + encrypted payload
         byte[] hmac = new byte[32];
         byte[] encrypted = new byte[data.Length - 32];
+        Array.Copy(data, 0, hmac, 0, 32);
+        Array.Copy(data, 32, encrypted, 0, encrypted.Length);
 
-        System.Array.Copy(data, 0, hmac, 0, 32);
-        System.Array.Copy(data, 32, encrypted, 0, encrypted.Length);
-
-        if (!Shared.PacketSecurity.Verify(encrypted, hmac))
-        {
-            NetworkLogger.Warning("HMAC verification failed");
-            return;
-        }
+        if (!Shared.PacketSecurity.Verify(encrypted, hmac)) return;
 
         byte[] decrypted = Shared.PacketSecurity.Decrypt(encrypted);
-
         PacketType type = (PacketType)decrypted[0];
         byte[] payload = new byte[decrypted.Length - 1];
-        System.Array.Copy(decrypted, 1, payload, 0, payload.Length);
+        Array.Copy(decrypted, 1, payload, 0, payload.Length);
 
-        NetworkLogger.Received(type);
         packetManager.Handle(type, payload);
     }
 
-    void OnDestroy()
-    {
-        Shutdown("Client destroyed");
-    }
-
-    private void Shutdown(string reason)
-    {
-        NetworkLogger.Warning($"Shutdown: {reason}");
-        Client?.Stop();
-    }
+    void Update() => Client?.PollEvents();
+    void OnDestroy() => Client?.Stop();
 }

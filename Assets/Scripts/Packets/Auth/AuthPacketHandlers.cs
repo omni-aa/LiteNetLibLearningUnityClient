@@ -13,7 +13,7 @@ public static class AuthPacketHandlers
             .Deserialize<WelcomePacket>(payload);
 
         NetworkLogger.Info(
-            $"WELCOME | ID={packet.PlayerId} | {packet.Message}"
+            $"WELCOME TO | ID={packet.PlayerId} | {packet.Message}"
         );
     }
 }
